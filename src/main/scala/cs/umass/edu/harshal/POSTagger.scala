@@ -2,10 +2,14 @@ package cs.umass.edu.harshal
 
 import actors.Futures._
 import collection.mutable
-import collection.mutable.{Set=>mSet}
+import collection.mutable.{HashSet=>mSet}
+import scala.Array
 
 
-case class Variable(name:String,cardinality:Int)
+class Variable(n:String,c:Int){
+  def name = n
+  def cardinality = c
+}
 
 object Factor{
 
@@ -28,10 +32,15 @@ object Factor{
   }
 }
 
-case class Factor(value:Array[Double],scope:Set[Variable],strides:Array[Int],logSpace:Boolean=false){
+class Factor(scpe:Set[Variable],strides:Array[Int],logSpace:Boolean=false,var value:Array[Double]=Array[Double]()){
 
   val stride = scope.zip(strides).toMap
 
+  private lazy val size = scope.foldLeft(1)((acc,v)=>acc*v.cardinality)
+
+  def :=(v:Array[Double]) = { assert(v.size==size);value=v }
+
+  def scope = scpe
   //  if (!logSpace) for (i<-0 until value.length) value(i)=scala.math.exp(value(i))
 
   override def toString:String = {
@@ -43,7 +52,7 @@ case class Factor(value:Array[Double],scope:Set[Variable],strides:Array[Int],log
     val fScope = scope.toArray
     val strides = Factor.calculateStrides(fScope)
     val size = scope.foldLeft(1)((acc,v)=>acc*v.cardinality)
-    val factor = new Factor(Seq.fill(size)(0.0).toArray,scope,strides,logSpace)
+    val factor = new Factor(scope,strides,logSpace,Seq.fill(size)(0.0).toArray)
     val assignment = Seq.fill(scope.size)(0).toArray
     for (i <- 0 until size){
       val index = (0 until scope.size).foldLeft(0)((acc,l)=>
@@ -67,7 +76,7 @@ case class Factor(value:Array[Double],scope:Set[Variable],strides:Array[Int],log
         val fScope = scope.toArray
         val strides = Factor.calculateStrides(fScope)
         val size = scope.foldLeft(1)((acc,v)=>acc*v.cardinality)
-        val factor = new Factor(Seq.fill(size)(0.0).toArray,scope,strides,logSpace)
+        val factor = new Factor(scope,strides,logSpace,Seq.fill(size)(0.0).toArray)
         val assignment = Seq.fill(scope.size)(0).toArray
         for (i <- 0 until size){
           factor.value(i) = this.apply(j)*f2(k)
@@ -100,7 +109,7 @@ case class Factor(value:Array[Double],scope:Set[Variable],strides:Array[Int],log
       val fScope = scope.toArray
       val strides = Factor.calculateStrides(fScope)
       val size = scope.foldLeft(1)((acc,v)=>acc*v.cardinality)
-      val factor = new Factor(Seq.fill(size)(0.0).toArray,scope,strides,logSpace)
+      val factor = new Factor(scope,strides,logSpace,Seq.fill(size)(0.0).toArray)
       val assignment = Seq.fill(scope.size)(0).toArray
       for (i <- 0 until size){
         factor.value(i) = this.apply(j)+f2(k)
@@ -131,7 +140,7 @@ case class Factor(value:Array[Double],scope:Set[Variable],strides:Array[Int],log
       val fScope = scope.toArray
       val strides = Factor.calculateStrides(fScope)
       val size = scope.foldLeft(1)((acc,v)=>acc*v.cardinality)
-      val factor = new Factor(Seq.fill(size)(0.0).toArray,scope,strides,logSpace)
+      val factor = new Factor(scope,strides,logSpace,Seq.fill(size)(0.0).toArray)
       val assignment = Seq.fill(scope.size)(0).toArray
       for (i <- 0 until size){
         factor.value(i) = (0 until variable.cardinality).foldLeft(0.0)((acc,j)=>{
@@ -152,7 +161,7 @@ case class Factor(value:Array[Double],scope:Set[Variable],strides:Array[Int],log
     val fScope = scope.toArray
     val strides = Factor.calculateStrides(fScope)
     val size = scope.foldLeft(1)((acc,v)=>acc*v.cardinality)
-    val factor = new Factor(Seq.fill(size)(0.0).toArray,scope,strides,logSpace)
+    val factor = new Factor(scope,strides,logSpace,Seq.fill(size)(0.0).toArray)
     val assignment = Seq.fill(scope.size)(0).toArray
     for (i <- 0 until size){
       val temp = (0 until variable.cardinality).map(j=>{
@@ -183,12 +192,13 @@ case class Factor(value:Array[Double],scope:Set[Variable],strides:Array[Int],log
   def apply(index:Int) = value(index)
 }
 
-case class CliqueTree(cliques:Array[Clique],var status:Int = 0){
+class CliqueTree(cs:Array[Clique],var status:Int = 0){
+  def cliques = cs
   lazy val reverse = cliques.reverse
   def done:Boolean = status==cliques.size
 }
 
-class Clique(factors:Set[Factor],neighbors:mSet[Clique]= mSet[Clique]()){
+case class Clique(factors:Set[Factor],neighbors:mSet[Clique]= mSet[Clique]()){
   var psi = factors.foldLeft(null.asInstanceOf[Factor])((acc,f)=> f*acc)
   val incoming:mSet[Factor] = mSet[Factor]()
   val downstream = mSet[Clique]()
@@ -244,33 +254,82 @@ class Inference(cTree:CliqueTree){
   }
 }
 
-object Runner extends App{
-  val y1 = Variable("y1",2)
-  val y2 = Variable("y2",2)
-  val y3 = Variable("y3",2)
-  val y4 = Variable("y4",2)
-  val phi1 = new Factor(Array(0.0,1.0),Set(y1),Factor.calculateStrides(Array(y1)),true)
-  val phi2 = new Factor(Array(1.0,0.0),Set(y2),Factor.calculateStrides(Array(y2)),true)
-  val phi3 = new Factor(Array(0.0,1.0),Set(y3),Factor.calculateStrides(Array(y3)),true)
-  val phi4 = new Factor(Array(0.0,1.0),Set(y4),Factor.calculateStrides(Array(y4)),true)
-  val phi12 = new Factor(Array(2.0,1.0,1.0,2.0),Set(y1,y2),Factor.calculateStrides(Array(y1,y2)),true)
-  val phi23 = new Factor(Array(2.0,1.0,1.0,2.0),Set(y2,y3),Factor.calculateStrides(Array(y2,y3)),true)
-  val phi34 = new Factor(Array(2.0,1.0,1.0,2.0),Set(y3,y4),Factor.calculateStrides(Array(y3,y4)),true)
-  val c1 = new Clique(Set(phi1,phi12))
-  val c2 = new Clique(Set(phi2,phi23))
-  val c3 = new Clique(Set(phi3,phi4,phi34))
-  c1.getNeighbors+=c2
-  c2.getNeighbors++=Seq(c1,c3)
-  c3.getNeighbors+=c2
-  val cTree = CliqueTree(Array(c1,c2,c3))
-  new Inference(cTree).infer
-  println(c1.beta)
-  println(c2.beta)
-  println(c3.beta)
-  c3.beta.value.foreach(v=>println(math.exp(v-c3.beta.partitionFn)))
-  val x1 = Variable("x1",2)
-  val x = new Factor(Array(1.0,0.0,0.0,1.0),Set(x1,y1),Factor.calculateStrides(Array(x1,y1)),true)
-  println(x.reduce(x1,1))
+final class Feature(name:String,cardinality:Int) extends Variable(name,cardinality)
+final class Label(name:String,cardinality:Int) extends Variable(name,cardinality)
 
+case class Token(values:Array[Int])
+
+class CRFModel(length:Int){
+  val features = Array(new Feature("bias",1),
+    new Feature("Initial Capital",2),
+    new Feature("All Capitals",2),
+    new Feature("Prefix ID",201),
+    new Feature("Siffix ID",201))
+
+  val label = new Label("POS Tag",10)
+
+//  val labelFactors = (1 to length).map( _ => new Factor(Set(label),Factor.calculateStrides(Array(label)),true) ).toArray
+
+  val featuresFactors = new Factor((features+label).toSet,Factor.calculateStrides((features+label)),true)
+
+  val pariwiseFactors = (1 until length).map(_ => new Factor(Set(label,label),Factor.calculateStrides(Array(label,label)),true) ).toArray
+
+  def getCliques(labelFactors:Array[Factor]) = {
+    labelFactors.take(length-2).zip(pariwiseFactors.take(length-2)).map( f => new Clique(Set(f._1,f._2)) ) ++
+      new Clique( (labelFactors.takeRight(2) + pariwiseFactors.last).toSet )
+  }
+
+  def setNeighbors(cliques:Array[Clique]) = {
+    for (i <- 0 until cliques.length){
+      if (i==0 ) { cliques(i).neighbors ++ cliques(i+1) }
+      else if (i==cliques.length-1) { cliques(i).neighbors ++ cliques(i-1) }
+      else { cliques(i).neighbors++ Seq(cliques(i-1),cliques(i+1)) }
+    }
+  }
+
+  def getCTree(instance:Array[Token])={
+    val reduced = instance.map( token => {
+      features.zipWithIndex.foldLeft(featuresFactors)((fact,feat)=> fact.reduce(feat._1,token(feat._2)) )
+    })
+    val cliques = getCliques(reduced)
+    setNeighbors(cliques)
+    new CliqueTree(cliques)
+  }
+
+  def likelihood(weights:Array[Double]):Double={
+     null
+
+  }
+}
+
+
+
+object Runner extends App{
+//  val y1 = Variable("y1",2)
+//  val y2 = Variable("y2",2)
+//  val y3 = Variable("y3",2)
+//  val y4 = Variable("y4",2)
+//  val phi1 = new Factor(Array(0.0,1.0),Set(y1),Factor.calculateStrides(Array(y1)),true)
+//  val phi2 = new Factor(Array(1.0,0.0),Set(y2),Factor.calculateStrides(Array(y2)),true)
+//  val phi3 = new Factor(Array(0.0,1.0),Set(y3),Factor.calculateStrides(Array(y3)),true)
+//  val phi4 = new Factor(Array(0.0,1.0),Set(y4),Factor.calculateStrides(Array(y4)),true)
+//  val phi12 = new Factor(Array(2.0,1.0,1.0,2.0),Set(y1,y2),Factor.calculateStrides(Array(y1,y2)),true)
+//  val phi23 = new Factor(Array(2.0,1.0,1.0,2.0),Set(y2,y3),Factor.calculateStrides(Array(y2,y3)),true)
+//  val phi34 = new Factor(Array(2.0,1.0,1.0,2.0),Set(y3,y4),Factor.calculateStrides(Array(y3,y4)),true)
+//  val c1 = new Clique(Set(phi1,phi12))
+//  val c2 = new Clique(Set(phi2,phi23))
+//  val c3 = new Clique(Set(phi3,phi4,phi34))
+//  c1.getNeighbors+=c2
+//  c2.getNeighbors++=Seq(c1,c3)
+//  c3.getNeighbors+=c2
+//  val cTree = CliqueTree(Array(c1,c2,c3))
+//  new Inference(cTree).infer
+//  println(c1.beta)
+//  println(c2.beta)
+//  println(c3.beta)
+//  c3.beta.value.foreach(v=>println(math.exp(v-c3.beta.partitionFn)))
+//  val x1 = Variable("x1",2)
+//  val x = new Factor(Array(1.0,0.0,0.0,1.0),Set(x1,y1),Factor.calculateStrides(Array(x1,y1)),true)
+//  println(x.reduce(x1,1))
 
 }
