@@ -5,6 +5,27 @@ import collection.mutable
 import collection.mutable.{HashSet=>mSet}
 import scala.Array
 
+object RichArray{
+  implicit def orig2rich(a: Array[Double]) = new {
+    def index(s:Int,e:Int):Array[Double] = (s to e).map( i => a(i) ).toArray
+  }
+}
+
+
+class FeatureVector(vars:Array[Variable]) {
+  private lazy val size = vars.foldLeft(1)((acc,v)=>acc*v.cardinality)
+  private var vector = Array.fill(size)(0)
+  val index = vars.scanLeft(0)(_ + _.cardinality).toArray
+  def increment(i:Int,j:Int){
+    vector(index(i)+j)+=1
+  }
+  def increment(i:Int){
+    vector(i)+=1
+  }
+  def score(weights:Array[Double]) = vector.zip(weights).foldLeft(0.0)( (acc,w) => acc+(w._1*w._2))
+  def +(that:FeatureVector):FeatureVector = { val newFv = new FeatureVector(this.vars); newFv.vector = this.vector.zip(that.vector).map(v=>(v._1+v._2)); newFv }
+  def ::(that:FeatureVector):FeatureVector = { val newFv = new FeatureVector(this.vars ++: this.vars); newFv.vector = this.vector ++: that.vector; newFv }
+}
 
 class Variable(n:String,c:Int){
   def name = n
@@ -32,19 +53,19 @@ object Factor{
   }
 }
 
-class Factor(scpe:Set[Variable],strides:Array[Int],logSpace:Boolean=false,var value:Array[Double]=Array[Double]()){
+class Factor(scpe:Set[Variable],strides:Array[Int],logSpace:Boolean=false,var score:Array[Double]=Array[Double]()){
 
   val stride = scope.zip(strides).toMap
 
   private lazy val size = scope.foldLeft(1)((acc,v)=>acc*v.cardinality)
 
-  def :=(v:Array[Double]) = { assert(v.size==size);value=v }
+  def :=(v:Array[Double]) = { assert(v.size==size);score=v }
 
   def scope = scpe
   //  if (!logSpace) for (i<-0 until value.length) value(i)=scala.math.exp(value(i))
 
   override def toString:String = {
-    scope.map(_.name).mkString("")+" = "+"["+value.mkString(",")+"]"
+    scope.map(_.name).mkString("")+" = "+"["+score.mkString(",")+"]"
   }
 
   def reduce(variable:Variable,assign:Int):Factor = {
@@ -52,7 +73,7 @@ class Factor(scpe:Set[Variable],strides:Array[Int],logSpace:Boolean=false,var va
     val fScope = scope.toArray
     val strides = Factor.calculateStrides(fScope)
     val size = scope.foldLeft(1)((acc,v)=>acc*v.cardinality)
-    val factor = new Factor(scope,strides,logSpace,Seq.fill(size)(0.0).toArray)
+    val factor = new Factor(scope,strides,logSpace,Array.fill(size)(0.0))
     val assignment = Seq.fill(scope.size)(0).toArray
     for (i <- 0 until size){
       val index = (0 until scope.size).foldLeft(0)((acc,l)=>
@@ -60,7 +81,7 @@ class Factor(scpe:Set[Variable],strides:Array[Int],logSpace:Boolean=false,var va
         assignment(l) = (scala.math.floor(i/strides(l))%fScope(l).cardinality).toInt
         acc+assignment(l)*this.stride(fScope(l))
       })+assign*this.stride(variable)
-      factor.value(i) = this(index)
+      factor.score(i) = this(index)
     }
     factor
   }
@@ -79,7 +100,7 @@ class Factor(scpe:Set[Variable],strides:Array[Int],logSpace:Boolean=false,var va
         val factor = new Factor(scope,strides,logSpace,Seq.fill(size)(0.0).toArray)
         val assignment = Seq.fill(scope.size)(0).toArray
         for (i <- 0 until size){
-          factor.value(i) = this.apply(j)*f2(k)
+          factor.score(i) = this.apply(j)*f2(k)
           var flag = true
           var l = 0
           while(flag && l<scope.size){
@@ -112,7 +133,7 @@ class Factor(scpe:Set[Variable],strides:Array[Int],logSpace:Boolean=false,var va
       val factor = new Factor(scope,strides,logSpace,Seq.fill(size)(0.0).toArray)
       val assignment = Seq.fill(scope.size)(0).toArray
       for (i <- 0 until size){
-        factor.value(i) = this.apply(j)+f2(k)
+        factor.score(i) = this.apply(j)+f2(k)
         var flag = true
         var l = 0
         while(flag && l<scope.size){
@@ -143,13 +164,13 @@ class Factor(scpe:Set[Variable],strides:Array[Int],logSpace:Boolean=false,var va
       val factor = new Factor(scope,strides,logSpace,Seq.fill(size)(0.0).toArray)
       val assignment = Seq.fill(scope.size)(0).toArray
       for (i <- 0 until size){
-        factor.value(i) = (0 until variable.cardinality).foldLeft(0.0)((acc,j)=>{
+        factor.score(i) = (0 until variable.cardinality).foldLeft(0.0)((acc,j)=>{
           val index = (0 until scope.size).foldLeft(0)((acc,l)=>
           {
             assignment(l) = (scala.math.floor(i/strides(l))%fScope(l).cardinality).toInt
             acc+assignment(l)*this.stride(fScope(l))
           })+j*this.stride(variable)
-          acc+this.value(index)
+          acc+this.score(index)
         })
       }
       factor
@@ -170,9 +191,9 @@ class Factor(scpe:Set[Variable],strides:Array[Int],logSpace:Boolean=false,var va
           assignment(l) = (scala.math.floor(i/strides(l))%fScope(l).cardinality).toInt
           acc+assignment(l)*this.stride(fScope(l))
         })+j*this.stride(variable)
-        this.value(index)
+        this.score(index)
       })
-      factor.value(i) = logsumexp(temp)
+      factor.score(i) = logsumexp(temp)
     }
     factor
   }
@@ -185,11 +206,11 @@ class Factor(scpe:Set[Variable],strides:Array[Int],logSpace:Boolean=false,var va
 
   def partitionFn = {
     val tempf = this.scope.tail.foldLeft(null.asInstanceOf[Factor])((_,v)=>this.marginalize(v))
-    if (logSpace) logsumexp(tempf.value)
-    else tempf.value.foldLeft(0.0)((acc,d)=>acc+d)
+    if (logSpace) logsumexp(tempf.score)
+    else tempf.score.foldLeft(0.0)((acc,d)=>acc+d)
   }
 
-  def apply(index:Int) = value(index)
+  def apply(index:Int) = score(index)
 }
 
 class CliqueTree(cs:Array[Clique],var status:Int = 0){
@@ -254,51 +275,107 @@ class Inference(cTree:CliqueTree){
   }
 }
 
-final class Feature(name:String,cardinality:Int) extends Variable(name,cardinality)
-final class Label(name:String,cardinality:Int) extends Variable(name,cardinality)
+//final class Feature(name:String,cardinality:Int) extends Variable(name,cardinality)
+//final class Label(name:String,cardinality:Int) extends Variable(name,cardinality)
 
-case class Token(values:Array[Int])
+case class Token(values:Array[Int]){
+  def apply(i:Int) = values(i)
+}
 
 class CRFModel(length:Int){
-  val features = Array(new Feature("bias",1),
-    new Feature("Initial Capital",2),
-    new Feature("All Capitals",2),
-    new Feature("Prefix ID",201),
-    new Feature("Siffix ID",201))
+  val features = Array(new Variable("bias",1),
+    new Variable("Initial Capital",2),
+    new Variable("All Capitals",2),
+    new Variable("Prefix ID",201),
+    new Variable("Siffix ID",201))
 
-  val label = new Label("POS Tag",10)
+  val indexLookup = features.scanLeft(0)(_ + _.cardinality).toArray
+
+  val label = new Variable("POS Tag",10)
 
 //  val labelFactors = (1 to length).map( _ => new Factor(Set(label),Factor.calculateStrides(Array(label)),true) ).toArray
 
-  val featuresFactors = new Factor((features+label).toSet,Factor.calculateStrides((features+label)),true)
-
-  val pariwiseFactors = (1 until length).map(_ => new Factor(Set(label,label),Factor.calculateStrides(Array(label,label)),true) ).toArray
-
-  def getCliques(labelFactors:Array[Factor]) = {
-    labelFactors.take(length-2).zip(pariwiseFactors.take(length-2)).map( f => new Clique(Set(f._1,f._2)) ) ++
-      new Clique( (labelFactors.takeRight(2) + pariwiseFactors.last).toSet )
+  def getCliques(labelFactors:Array[Factor],pariwiseFactors: Array[Factor]) = {
+    labelFactors.take(length-2).zip(pariwiseFactors.take(length-2)).map( f => new Clique(Set(f._1,f._2)) ) :+
+      new Clique( (labelFactors.takeRight(2) :+ pariwiseFactors.last).toSet )
   }
 
   def setNeighbors(cliques:Array[Clique]) = {
     for (i <- 0 until cliques.length){
-      if (i==0 ) { cliques(i).neighbors ++ cliques(i+1) }
-      else if (i==cliques.length-1) { cliques(i).neighbors ++ cliques(i-1) }
-      else { cliques(i).neighbors++ Seq(cliques(i-1),cliques(i+1)) }
+      if (i==0 ) { cliques(i).neighbors + cliques(i+1) }
+      else if (i==cliques.length-1) { cliques(i).neighbors + cliques(i-1) }
+      else { cliques(i).neighbors ++ Seq(cliques(i-1),cliques(i+1)) }
     }
   }
 
-  def getCTree(instance:Array[Token])={
+  def getCTree(instance:Array[Token],weights:Array[Double])={
+    import RichArray.orig2rich
+
+    val initFact = new Factor(Set(features.head,label),
+      Factor.calculateStrides(Array(features.head,label)),
+      false,
+      filterWeights(weights,0))
+
+    def filterWeights(weights:Array[Double],f:Int):Array[Double] = {
+      (0 until label.cardinality).flatMap(i=> { val offset = indexLookup.last*i;
+        weights.index(offset+indexLookup(f),offset+indexLookup(f+1)-1)
+      }).toArray
+    }
+
+    def makeFactor(v:Variable,f:Int) = new Factor(Set(v,label),
+      Factor.calculateStrides(Array(v,label)),
+      false,
+      filterWeights(weights,f))
+
+    val featuresFactor = features.tail.zipWithIndex.foldLeft(initFact)( (f,v) =>{ f*makeFactor(v._1,v._2) } )
+
+    val s = (indexLookup.length-1)*indexLookup.last
+    val e = weights.length-1
+
+    val pairwiseWeights = weights.index(s,e)
+
+    val pariwiseFactors = (1 until length).map(_ => new Factor(Set(label,label),
+      Factor.calculateStrides(Array(label,label)),true,
+      pairwiseWeights)).toArray
+
+
     val reduced = instance.map( token => {
-      features.zipWithIndex.foldLeft(featuresFactors)((fact,feat)=> fact.reduce(feat._1,token(feat._2)) )
+      features.zipWithIndex.foldLeft(featuresFactor)((fact,feat)=> fact.reduce(feat._1,token(feat._2)) )
     })
-    val cliques = getCliques(reduced)
+    val cliques = getCliques(reduced,pariwiseFactors)
     setNeighbors(cliques)
     new CliqueTree(cliques)
   }
 
-  def likelihood(weights:Array[Double]):Double={
-     null
+  def computeSf(instance:Array[Token],features:Array[Variable],label:Variable)={
+    val fvs = (1 to label.cardinality).map( _ => new FeatureVector(features) ).toArray
 
+    val pfvs = (1 to label.cardinality).map( _ => new FeatureVector(Array(label)) ).toArray
+
+    //    for (instance <- instances){
+    for (t <- instance){
+
+      for ((f,i) <- t.values.tail.zipWithIndex){
+        fvs(t.values.head-1).increment(i-1,f-1)
+      }
+      //      }
+    }
+
+    instance.sliding(2).map(t => pfvs(t(0).values.head-1).increment(t(1).values.head-1))
+
+    fvs.reduceLeft( _ :: _ ) :: pfvs.reduceLeft( _ :: _ )
+  }
+
+  def getData() : Array[Array[Token]]=null
+
+  def likelihood(weights:Array[Double]):Double={
+    val instances = getData
+    for (instance <- instances){
+      val sf = computeSf(instance,features,label).score(weights)
+      val cTree = getCTree(instance,weights)
+
+    }
+    0.0
   }
 }
 
@@ -331,5 +408,14 @@ object Runner extends App{
 //  val x1 = Variable("x1",2)
 //  val x = new Factor(Array(1.0,0.0,0.0,1.0),Set(x1,y1),Factor.calculateStrides(Array(x1,y1)),true)
 //  println(x.reduce(x1,1))
-
+  val y1 = new Variable("y1",2)
+  val y2 = new Variable("y2",2)
+  val phi1 = new Factor(Set(y1),Factor.calculateStrides(Array(y1)),true)
+  val phi2 = new Factor(Set(y2),Factor.calculateStrides(Array(y2)),true)
+  phi1:=Array(1.0,1.0)
+  phi2:=Array(1.0,0.0)
+  val phi12 = phi1*phi2
+//  println(Factor.toPotential(phi12.score))
+  println(phi12)
+  println(phi12.score.foldLeft(0.0)((a,f)=> a+(f-phi12.partitionFn)))
 }
